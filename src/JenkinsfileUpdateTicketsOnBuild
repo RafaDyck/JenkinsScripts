@@ -1,0 +1,48 @@
+@NonCPS
+def getJiraTicketsFromCommits() {
+    def commits = currentBuild.changeSets
+    def jiraTickets = []
+    for (int i = 0; i < commits.size(); i++){
+        def entries = commits[i].items
+        for (int j = 0; j < entries.length; j++) {
+            def ticketFromCommit = (entries[j].msg =~ '(?:\\s|^)([A-Z]+-[0-9]+)(?=\\s|$)')[0][1]
+            jiraTickets.add(ticketFromCommit)
+        }
+    }
+    return jiraTickets.unique()
+}
+
+pipeline {
+
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(name: 'Environment', defaultValue: '', description: '')
+    }
+
+    stages {
+        stage('JIRA') {
+            steps {
+                script {
+                    def jiraTicketList = getJiraTicketsFromCommits()
+                    def jiraTicketListString = jiraTicketList.toString().replace('[', '').replace(']', '')
+                    for (int k = 0; k < jiraTicketList.size(); k++) {
+                        withEnv(['JIRA_SITE=Jira']) {
+                            def comment = [body: '*JENKINS BUILD RESULTS* \n\n*Branch:* ' + env.BRANCH_NAME + '\n*Deployed Environment:* ' + params.Environment +
+                                    '\n*Tickets:* [' + jiraTicketListString + '|https://' + jiraBaseUrl + '/issues/?jql=key%20IN%20(' +
+                                    jiraTicketListString.replace(', ', '%2c%20') + ')]']
+                            jiraAddComment idOrKey: jiraTicketList.get(k), input: comment
+                            def updateFields = [fields: [customfield_10000: params.Environment, customfield_10000: env.BRANCH_NAME ]]
+                            jiraEditIssue idOrKey: jiraTicketList.get(k), issue: updateFields
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

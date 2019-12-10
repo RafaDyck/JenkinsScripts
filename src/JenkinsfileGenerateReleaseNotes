@@ -1,0 +1,68 @@
+@NonCPS
+def getJiraTicketsFromCommits(changeLog) {
+    def commits = changeLog.split("\n")
+    def jiraTickets = []
+    for (int i = 0; i < commits.length; i++) {
+        def currentCommit = commits[i]
+        def pattern = ~/(?:\s|^)([A-Z]+-[0-9]+)(?=\s|$)/
+        def ticketFromCommit = (currentCommit =~ pattern)
+        if (ticketFromCommit) {
+            jiraTickets.add(ticketFromCommit[0][1])
+        }
+    }
+    return jiraTickets.unique()
+}
+
+pipeline {
+
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(name: 'fixVersionID', defaultValue: '', description: '')
+        gitParameter(branch: '', branchFilter: '.*', defaultValue: '', description: '', name: 'PRODBRANCH', quickFilterEnabled: false, selectedValue: 'NONE', sortMode: 'NONE', tagFilter: '*', type: 'PT_BRANCH')
+    }
+
+    stages {
+        stage('JIRA') {
+            steps {
+                script {
+                    COMMIT_CHANGE_SET = sh(returnStdout: true, script: "git log $PRODBRANCH origin/" + env.BRANCH_NAME + " --oneline").trim()
+                    def jiraTicketList = getJiraTicketsFromCommits(COMMIT_CHANGE_SET)
+                    withEnv(['JIRA_SITE=Jira']) {
+                        def version = jiraGetVersion id: param.fixVersionID
+                        def project = jiraGetProject idOrKey: version.data.projectId as String
+                        def jiraTicketListString = jiraTicketList.toString().replace('[', '').replace(']', '')
+                        for (int k = 0; k < jiraTicketList.size(); k++) {
+                            if (!jiraTicketList.get(k).contains(project.data.key)) {
+                                jiraTicketList.remove(k)
+                                continue
+                            }
+                            def comment = [body: '*JENKINS GENERATED RELEASE NOTES* \n\n*Fix Version:* [' +
+                                    version.data.name + '|' + jiraBaseUrl + '/browse/' + project.data.key + '/fixforversion/' + version.data.id + ']' +
+                                    '\n*Tickets:* [' + jiraTicketListString + '|https://' + jiraBaseUrl + '/issues/?jql=key%20IN%20(' +
+                                    jiraTicketListString.replace(', ', '%2c%20') + ')]']
+                            jiraAddComment idOrKey: jiraTicketList.get(k), input: comment
+                            def updateFields = [fields: [customfield_00000: env.BRANCH_NAME]]
+                            def ticketFields = jiraGetIssue idOrKey: jiraTicketList.get(k)
+                            def ticketFixVersion = ticketFields.data.fields.fixVersions
+                            if (ticketFixVersion != null && !ticketFixVersion.contains(param.fixVersionID)) {
+                                def updateVersion = ticketFields.data.fields.fixVersions << version.data
+                                updateFields = [fields: [customfield_00000: env.BRANCH_NAME, fixVersions: updateVersion]]
+                            }
+                            jiraEditIssue idOrKey: jiraTicketList.get(k), issue: updateFields
+                        }
+                        if (params.fixVersionID != null && !param.fixVersionID.isEmpty()) {
+                            def updateVersion = [description: "Release Branch: " + env.BRANCH_NAME]
+                            jiraEditVersion id: param.fixVersionID, version: updateVersion
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
