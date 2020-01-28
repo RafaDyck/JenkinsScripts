@@ -5,8 +5,12 @@ def getJiraTicketsFromCommits() {
     for (int i = 0; i < commits.size(); i++){
         def entries = commits[i].items
         for (int j = 0; j < entries.length; j++) {
-            def ticketFromCommit = (entries[j].msg =~ '(?:\\s|^)([A-Z]+-[0-9]+)(?=\\s|$)')[0][1]
-            jiraTickets.add(ticketFromCommit)
+            def currentCommit = commits[i]
+            def pattern = ~/(?:\s|^)([A-Z]+-[0-9]+)(?=\s|$)/
+            def ticketFromCommit = (currentCommit =~ pattern)
+            if (ticketFromCommit) {
+                jiraTickets.add(ticketFromCommit[0][1])
+            }
         }
     }
     return jiraTickets.unique()
